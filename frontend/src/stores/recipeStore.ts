@@ -40,7 +40,7 @@ export const useRecipeStore = defineStore('recipe', {
       }
     },
     async addRecipe(payload: NewRecipe): Promise<number> {
-      const next = { ...payload, schemaRev: 2 }
+      const next = { ...payload, schemaRev: 3 }
       const id = await db.recipes.add(plain(next))
       await this.load()
       return id

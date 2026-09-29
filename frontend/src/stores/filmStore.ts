@@ -23,7 +23,7 @@ export const useFilmStore = defineStore('film', {
       }
     },
     async addFilm(payload: NewFilm): Promise<number> {
-      const next = { ...payload, schemaRev: 2 }
+      const next = { ...payload, schemaRev: 3 }
       const id = await db.films.add(plain(next))
       await this.load()
       return id

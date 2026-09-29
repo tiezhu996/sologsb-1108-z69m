@@ -28,7 +28,7 @@ function isActive(path: string): boolean {
 function exportAll(): void {
   downloadJson(`gbfilmdev-backup-${new Date().toISOString().slice(0, 10)}.json`, {
     exportedAt: new Date().toISOString(),
-    schemaRev: 2,
+    schemaRev: 3,
     films: filmStore.films,
     developers: developerStore.developers,
     recipes: recipeStore.recipes,
