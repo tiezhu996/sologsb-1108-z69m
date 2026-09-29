@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 import EmptyPanel from '../components/common/EmptyPanel.vue'
 import FilterBar from '../components/common/FilterBar.vue'
@@ -9,7 +9,8 @@ import { useTempCompensate } from '../hooks/useTempCompensate'
 import { useDeveloperStore } from '../stores/developerStore'
 import { useFilmStore } from '../stores/filmStore'
 import { useRecipeStore } from '../stores/recipeStore'
-import { useRunStore } from '../stores/runStore'
+import { RunStockError, useRunStore } from '../stores/runStore'
+import type { DevRun } from '../types/dev-run'
 import type { TankType } from '../types/dev-run'
 
 interface FilterValue {
@@ -60,6 +61,8 @@ const form = reactive<RunForm>({
 })
 
 const selectedRecipe = computed(() => recipeStore.recipes.find((recipe) => recipe.id === form.recipeId))
+const selectedFilm = computed(() => filmStore.films.find((film) => film.id === selectedRecipe.value?.filmId))
+const filmOutOfStock = computed(() => selectedFilm.value !== undefined && selectedFilm.value.rollsLeft <= 0)
 const referenceTemp = computed(() => selectedRecipe.value?.tempC ?? 20)
 const { suggest } = useTempCompensate(referenceTemp)
 const suggestion = computed(() => {
@@ -111,6 +114,10 @@ async function submitRun(): Promise<void> {
     ElMessage.warning('请填写批次号、配方与结果评价')
     return
   }
+  if (filmOutOfStock.value) {
+    ElMessage.error('所选配方对应的胶片已缺货，请补货后再保存')
+    return
+  }
   saving.value = true
   const selectedDeveloper = developerStore.developers.find((item) => item.id === selectedRecipe.value?.developerId)
   const willExceedLimit = selectedDeveloper !== undefined
@@ -126,15 +133,21 @@ async function submitRun(): Promise<void> {
       runDate: form.runDate,
       result: form.result.trim()
     })
-    await Promise.all([developerStore.load(), recipeStore.load()])
+    await Promise.all([filmStore.load(), developerStore.load(), recipeStore.load()])
     if (willExceedLimit) {
-      ElMessage.warning('冲洗记录已保存，本次已超过显影液标称可冲上限，请评估后标记报废')
+      ElMessage.warning('冲洗记录已保存，胶片已扣一卷；本次已超过显影液标称可冲上限，请评估后标记报废')
     } else {
-      ElMessage.success('冲洗记录已保存，显影液用量同步更新')
+      ElMessage.success('冲洗记录已保存，胶片扣减一卷，显影液用量同步更新')
     }
     form.batchNo = `R-${today.replace(/-/g, '')}-${String(runStore.runs.length + 1).padStart(2, '0')}`
     form.result = ''
     showForm.value = false
+  } catch (error) {
+    if (error instanceof RunStockError) {
+      ElMessage.error(error.message)
+    } else {
+      throw error
+    }
   } finally {
     saving.value = false
   }
@@ -145,6 +158,36 @@ async function writeBack(recipeId?: number, runId?: number): Promise<void> {
   await runStore.writeBackNote(runId, recipeId)
   await recipeStore.load()
   ElMessage.success('本次实冲结果已回写配方注释')
+}
+
+async function revokeRun(run: DevRun): Promise<void> {
+  if (run.id === undefined) return
+  const consumed = !!run.filmConsumed
+  try {
+    await ElMessageBox.confirm(
+      consumed
+        ? `撤销将删除本条记录，并把 ${run.emulsionNo ?? '该胶片'} 退回一卷、显影液用量退回一卷。`
+        : '这是升级前的历史记录，撤销仅删除记录，不调整胶片余量与显影液用量。',
+      consumed ? '撤销本次胶片消耗？' : '删除历史记录？',
+      {
+        confirmButtonText: consumed ? '撤销消耗' : '删除记录',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+  const result = await runStore.revokeRun(run.id)
+  await Promise.all([filmStore.load(), developerStore.load()])
+  const refundNotes: string[] = []
+  if (result.filmReturned) refundNotes.push('胶片余量已退回一卷')
+  if (result.developerReturned) refundNotes.push('显影液用量已退回一卷')
+  ElMessage.success(
+    refundNotes.length
+      ? `已撤销冲洗记录，${refundNotes.join('，')}`
+      : '冲洗记录已删除（对应台账批次或显影液已不存在，未发生退回）'
+  )
 }
 
 onMounted(async () => {
@@ -215,15 +258,30 @@ onMounted(async () => {
         <div class="span-3 compensation-callout">
           <div>
             <strong>温度补偿建议</strong>
-            <p v-if="suggestion">{{ suggestion.advice }}；显影液用量会在保存后加一卷。</p>
+            <p v-if="suggestion">{{ suggestion.advice }}；保存后胶片余量扣减一卷，显影液用量同步加一卷。</p>
             <p v-else>请选择一条配方后查看修正建议。</p>
           </div>
           <button type="button" class="ghost-button" :disabled="!suggestion" @click="applySuggestion">采用修正时间</button>
         </div>
+        <div
+          v-if="selectedFilm"
+          class="span-3 stock-callout"
+          :class="{ 'stock-callout--danger': filmOutOfStock }"
+          data-testid="film-stock-hint"
+        >
+          <div>
+            <strong>本次消耗胶片</strong>
+            <p>
+              {{ selectedFilm.model }} · {{ selectedFilm.format }} · 乳剂批号 {{ selectedFilm.emulsionNo }}，
+              <template v-if="filmOutOfStock">当前余量 0 卷，已缺货，无法保存冲洗记录。</template>
+              <template v-else>当前余量 {{ selectedFilm.rollsLeft }} 卷，保存后定格批号并扣减一卷。</template>
+            </p>
+          </div>
+        </div>
       </div>
       <div class="form-actions">
         <button type="button" class="ghost-button" @click="showForm = false">取消</button>
-        <button type="submit" class="primary-button" data-testid="submit-run" :disabled="saving">
+        <button type="submit" class="primary-button" data-testid="submit-run" :disabled="saving || filmOutOfStock">
           {{ saving ? '保存中…' : '保存冲洗记录' }}
         </button>
       </div>
@@ -261,11 +319,25 @@ onMounted(async () => {
             <span><small>实测温度</small><strong>{{ run.actualTempC }}°C</strong></span>
             <span><small>实际时间</small><strong>{{ run.actualMinutes }} 分钟</strong></span>
             <span><small>罐型</small><strong>{{ run.tankType }}</strong></span>
+            <span data-testid="run-emulsion-no">
+              <small>乳剂批号</small>
+              <strong>{{ run.emulsionNo ?? '未记录' }}</strong>
+            </span>
           </div>
           <blockquote>{{ run.result }}</blockquote>
           <div class="run-card__foot">
             <small v-if="recipeForRun(run.recipeId)?.note">配方注释：{{ recipeForRun(run.recipeId)?.note }}</small>
-            <button type="button" class="text-button" @click="writeBack(run.recipeId, run.id)">回写配方注释</button>
+            <span class="run-card__actions">
+              <button type="button" class="text-button" @click="writeBack(run.recipeId, run.id)">回写配方注释</button>
+              <button
+                type="button"
+                class="text-button text-button--danger"
+                data-testid="revoke-run"
+                @click="revokeRun(run)"
+              >
+                {{ run.filmConsumed ? '撤销消耗' : '删除记录' }}
+              </button>
+            </span>
           </div>
         </div>
       </article>

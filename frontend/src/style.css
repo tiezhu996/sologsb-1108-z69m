@@ -983,6 +983,37 @@ td em {
   font-size: 11px;
 }
 
+.stock-callout {
+  padding: 12px;
+  border: 1px solid #d9b36c;
+  border-radius: 11px;
+  color: #6e5326;
+  background: #fbf3e2;
+}
+
+.stock-callout--danger {
+  border-color: #c9837b;
+  color: var(--danger);
+  background: #f9e9e7;
+}
+
+.stock-callout strong {
+  font-size: 13px;
+}
+
+.stock-callout p {
+  margin: 3px 0 0;
+  font-size: 11px;
+}
+
+.run-card__actions {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  gap: 14px;
+  align-items: center;
+}
+
 .footer {
   display: flex;
   justify-content: space-between;

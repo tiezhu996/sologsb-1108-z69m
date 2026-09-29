@@ -36,13 +36,13 @@ const recipeSeeds: DevRecipe[] = [
 ]
 
 const runSeeds: DevRun[] = [
-  { id: 1, batchNo: 'R-260918-01', recipeId: 1, actualTempC: 20.2, actualMinutes: 9.4, tankType: '双联罐', runDate: '2026-09-18', result: '密度均匀，中间调细腻', schemaRev: 2 },
-  { id: 2, batchNo: 'R-260920-02', recipeId: 2, actualTempC: 20.5, actualMinutes: 7.2, tankType: '双联罐', runDate: '2026-09-20', result: '暗部略薄，高光可控', schemaRev: 2 },
-  { id: 3, batchNo: 'R-260921-03', recipeId: 3, actualTempC: 38.1, actualMinutes: 3.25, tankType: '深罐', runDate: '2026-09-21', result: '肤色自然，灰雾轻微', schemaRev: 2 },
-  { id: 4, batchNo: 'R-260922-04', recipeId: 4, actualTempC: 19.8, actualMinutes: 11.2, tankType: '双联罐', runDate: '2026-09-22', result: '反差合适，边缘密度偏高', schemaRev: 2 },
-  { id: 5, batchNo: 'R-260923-05', recipeId: 5, actualTempC: 24.2, actualMinutes: 6.4, tankType: '深罐', runDate: '2026-09-23', result: '高光保留，暗部通透', schemaRev: 2 },
-  { id: 6, batchNo: 'R-260924-06', recipeId: 6, actualTempC: 19.5, actualMinutes: 13.2, tankType: '双联罐', runDate: '2026-09-24', result: '反差稍强，颗粒可接受', schemaRev: 2 },
-  { id: 7, batchNo: 'R-260925-07', recipeId: 7, actualTempC: 20.1, actualMinutes: 12.8, tankType: '双联罐', runDate: '2026-09-25', result: '阴影细节不足，建议延长 0.5 分钟', schemaRev: 2 }
+  { id: 1, batchNo: 'R-260918-01', recipeId: 1, actualTempC: 20.2, actualMinutes: 9.4, tankType: '双联罐', runDate: '2026-09-18', result: '密度均匀，中间调细腻', filmId: 1, emulsionNo: 'GP3-2504-A17', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 2, batchNo: 'R-260920-02', recipeId: 2, actualTempC: 20.5, actualMinutes: 7.2, tankType: '双联罐', runDate: '2026-09-20', result: '暗部略薄，高光可控', filmId: 2, emulsionNo: 'HP5-2509-B31', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 3, batchNo: 'R-260921-03', recipeId: 3, actualTempC: 38.1, actualMinutes: 3.25, tankType: '深罐', runDate: '2026-09-21', result: '肤色自然，灰雾轻微', filmId: 3, emulsionNo: 'PC400-147-02', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 4, batchNo: 'R-260922-04', recipeId: 4, actualTempC: 19.8, actualMinutes: 11.2, tankType: '双联罐', runDate: '2026-09-22', result: '反差合适，边缘密度偏高', filmId: 4, emulsionNo: 'GP3-2404-C08', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 5, batchNo: 'R-260923-05', recipeId: 5, actualTempC: 24.2, actualMinutes: 6.4, tankType: '深罐', runDate: '2026-09-23', result: '高光保留，暗部通透', filmId: 5, emulsionNo: 'HP5-45-24C', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 6, batchNo: 'R-260924-06', recipeId: 6, actualTempC: 19.5, actualMinutes: 13.2, tankType: '双联罐', runDate: '2026-09-24', result: '反差稍强，颗粒可接受', filmId: 1, emulsionNo: 'GP3-2504-A17', filmConsumed: false, developerCharged: false, schemaRev: 3 },
+  { id: 7, batchNo: 'R-260925-07', recipeId: 7, actualTempC: 20.1, actualMinutes: 12.8, tankType: '双联罐', runDate: '2026-09-25', result: '阴影细节不足，建议延长 0.5 分钟', filmId: 2, emulsionNo: 'HP5-2509-B31', filmConsumed: false, developerCharged: false, schemaRev: 3 }
 ]
 
 export class FilmDevDatabase extends Dexie {
@@ -76,6 +76,27 @@ export class FilmDevDatabase extends Dexie {
       })
       await transaction.table('runs').toCollection().modify((run: DevRun) => {
         run.schemaRev = 2
+      })
+    })
+    this.version(3).stores({
+      films: '++id, model, format, expireDate, rollsLeft',
+      developers: '++id, category, state, mixedAt',
+      recipes: '++id, filmId, developerId, dilution, pushPull, tempC',
+      runs: '++id, recipeId, filmId, runDate, tankType'
+    }).upgrade(async (transaction) => {
+      const recipes = await transaction.table<DevRecipe, number>('recipes').toArray()
+      const films = await transaction.table<FilmStock, number>('films').toArray()
+      const recipeFilmById = new Map(recipes.map((recipe) => [recipe.id, recipe.filmId]))
+      const filmById = new Map(films.map((film) => [film.id, film]))
+      // 历史记录只按原配方补出乳剂批号快照，不补扣胶片余量与显影液用量
+      await transaction.table('runs').toCollection().modify((run: DevRun) => {
+        const filmId = run.filmId ?? recipeFilmById.get(run.recipeId)
+        const film = filmId !== undefined ? filmById.get(filmId) : undefined
+        run.filmId = film?.id
+        run.emulsionNo = run.emulsionNo ?? film?.emulsionNo
+        run.filmConsumed = false
+        run.developerCharged = false
+        run.schemaRev = 3
       })
     })
   }
